@@ -15,16 +15,19 @@ SCHEMA_VERSION = 2
 
 
 def utc_now() -> datetime:
+    """Returns the current time in UTC."""
     return datetime.now(timezone.utc)
 
 
 def to_iso(value: datetime | None) -> str | None:
+    """Converts a datetime object to an ISO 8601 string in UTC."""
     if value is None:
         return None
     return value.astimezone(timezone.utc).isoformat()
 
 
 def from_iso(value: str | None) -> datetime | None:
+    """Converts an ISO 8601 string to a datetime object."""
     if not value:
         return None
     return datetime.fromisoformat(value)
@@ -47,6 +50,7 @@ def _decode_list(raw: str | None) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class ChatSettings:
+    """Represents the settings for a single chat."""
     chat_id: int
     enabled: bool
     log_chat_id: int | None
@@ -86,6 +90,7 @@ class ChatSettings:
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "ChatSettings":
+        """Creates a ChatSettings object from a database row."""
         return cls(
             chat_id=row["chat_id"],
             enabled=bool(row["enabled"]),
@@ -118,6 +123,7 @@ class ChatSettings:
 
 @dataclass(frozen=True)
 class MemberState:
+    """Represents the state of a single member in a chat."""
     chat_id: int
     user_id: int
     username: str
@@ -132,6 +138,7 @@ class MemberState:
 
     @classmethod
     def from_row(cls, row: sqlite3.Row | None, chat_id: int, user_id: int) -> "MemberState":
+        """Creates a MemberState object from a database row, or a default state if no row is found."""
         # If the user has never been seen before, return a blank-slate state.
         if row is None:
             return cls(
@@ -173,6 +180,7 @@ class RegexFilter:
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "RegexFilter":
+        """Creates a RegexFilter object from a database row."""
         return cls(
             id=row["id"],
             chat_id=row["chat_id"],
@@ -184,6 +192,7 @@ class RegexFilter:
 
 @dataclass(frozen=True)
 class PendingVerification:
+    """Represents a user who is pending verification."""
     chat_id: int
     user_id: int
     token: str
@@ -193,6 +202,7 @@ class PendingVerification:
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "PendingVerification":
+        """Creates a PendingVerification object from a database row."""
         return cls(
             chat_id=row["chat_id"],
             user_id=row["user_id"],
@@ -208,6 +218,7 @@ class PendingVerification:
 # ---------------------------------------------------------------------------
 
 class Repository:
+    """Provides an interface for all database operations."""
     def __init__(self, db_path: Path, settings: Settings) -> None:
         self.db_path = db_path
         self.settings = settings
@@ -283,29 +294,23 @@ class Repository:
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             chat_id    INTEGER NOT NULL,
             pattern    TEXT    NOT NULL,
-            label      TEXT    NOT NULL DEFAULT '',
+            label      TEXT    NOT NULL,
             created_at TEXT    NOT NULL
         );
-
-        CREATE INDEX IF NOT EXISTS idx_regex_filters_chat
-        ON regex_filters (chat_id);
 
         CREATE TABLE IF NOT EXISTS message_samples (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             chat_id      INTEGER NOT NULL,
             user_id      INTEGER NOT NULL,
             fingerprint  TEXT    NOT NULL,
-            message_text TEXT    NOT NULL DEFAULT '',
+            message_text TEXT    NOT NULL,
             created_at   TEXT    NOT NULL
         );
-
-        CREATE INDEX IF NOT EXISTS idx_message_samples_chat_user_created
-        ON message_samples (chat_id, user_id, created_at);
 
         CREATE TABLE IF NOT EXISTS pending_verifications (
             chat_id           INTEGER NOT NULL,
             user_id           INTEGER NOT NULL,
-            token             TEXT    NOT NULL UNIQUE,
+            token             TEXT    NOT NULL,
             prompt_message_id INTEGER NOT NULL,
             expires_at        TEXT    NOT NULL,
             created_at        TEXT    NOT NULL,
@@ -315,190 +320,95 @@ class Repository:
         CREATE TABLE IF NOT EXISTS join_events (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             chat_id    INTEGER NOT NULL,
+            user_id    INTEGER NOT NULL,
             created_at TEXT    NOT NULL
         );
 
-        CREATE INDEX IF NOT EXISTS idx_join_events_chat_created
-        ON join_events (chat_id, created_at);
-
         CREATE TABLE IF NOT EXISTS audit_log (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id      INTEGER NOT NULL,
-            user_id      INTEGER,
-            actor_id     INTEGER,
-            action       TEXT    NOT NULL,
-            reason       TEXT    NOT NULL DEFAULT '',
-            details_json TEXT    NOT NULL DEFAULT '{}',
-            created_at   TEXT    NOT NULL
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id    INTEGER NOT NULL,
+            created_at TEXT    NOT NULL,
+            action     TEXT    NOT NULL,
+            target_id  INTEGER,
+            actor_id   INTEGER,
+            reason     TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS schema_version (
-            version INTEGER PRIMARY KEY
+        CREATE TABLE IF NOT EXISTS _schema_version (
+            version INTEGER NOT NULL
         );
         """
-
-    def _get_schema_version(self, conn: sqlite3.Connection) -> int:
-        """Read the stored schema version (0 if the table doesn't exist yet)."""
-        try:
-            row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
-            return int(row["v"]) if row and row["v"] is not None else 0
-        except sqlite3.OperationalError:
-            return 0
 
     def _apply_migrations(self) -> None:
-        """
-        Run any schema changes that are newer than what the DB currently has.
-        Each migration is idempotent — it only runs once.
-        """
+        """Applies any missing schema migrations in order."""
         with self._connect() as conn:
-            version = self._get_schema_version(conn)
+            cursor = conn.execute("SELECT version FROM _schema_version")
+            row = cursor.fetchone()
+            if row is None:
+                conn.execute("INSERT INTO _schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+                version = SCHEMA_VERSION
+            else:
+                version = row["version"]
 
-            if version < 1:
-                # v1 → v2: add new columns to chat_settings and members that
-                # might be missing on databases created before SCHEMA_VERSION 2.
-                _safe_add_columns(conn, "chat_settings", [
-                    ("slowmode_sec",     "INTEGER NOT NULL DEFAULT 0"),
-                    ("anti_forward",     "INTEGER NOT NULL DEFAULT 0"),
-                    ("warn_expiry_days", "INTEGER NOT NULL DEFAULT 0"),
-                    ("mute_escalation",  "INTEGER NOT NULL DEFAULT 1"),
-                    ("welcome_message",  "TEXT    NOT NULL DEFAULT ''"),
-                ])
-                _safe_add_columns(conn, "members", [
-                    ("shadowbanned",    "INTEGER NOT NULL DEFAULT 0"),
-                    ("last_message_at", "TEXT"),
-                    ("mute_count",      "INTEGER NOT NULL DEFAULT 0"),
-                ])
-                # Create the regex_filters table if it somehow doesn't exist.
+            if version < 2:
+                # Version 2 adds the audit_log table
                 conn.execute("""
-                    CREATE TABLE IF NOT EXISTS regex_filters (
-                        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                        chat_id    INTEGER NOT NULL,
-                        pattern    TEXT    NOT NULL,
-                        label      TEXT    NOT NULL DEFAULT '',
-                        created_at TEXT    NOT NULL
-                    )
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id    INTEGER NOT NULL,
+                    created_at TEXT    NOT NULL,
+                    action     TEXT    NOT NULL,
+                    target_id  INTEGER,
+                    actor_id   INTEGER,
+                    reason     TEXT
+                );
                 """)
-                conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_regex_filters_chat
-                    ON regex_filters (chat_id)
-                """)
-                conn.execute("INSERT OR REPLACE INTO schema_version (version) VALUES (1)")
-
-            # Add future migration blocks here: if version < 2: ...
+                conn.execute("UPDATE _schema_version SET version = 2")
 
             conn.commit()
-
-    def _ensure_chat_settings(self, conn: sqlite3.Connection, chat_id: int) -> None:
-        """Insert a default settings row for a chat the bot hasn't seen before."""
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO chat_settings (
-                chat_id, verification_timeout_sec, max_warnings, mute_minutes,
-                flood_limit, flood_window_sec, duplicate_window_sec
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                chat_id,
-                self.settings.default_verification_timeout_sec,
-                self.settings.default_max_warnings,
-                self.settings.default_mute_minutes,
-                self.settings.default_flood_limit,
-                self.settings.default_flood_window_sec,
-                self.settings.default_duplicate_window_sec,
-            ),
-        )
 
     # ------------------------------------------------------------------
     # Chat settings
     # ------------------------------------------------------------------
 
     def get_chat_settings(self, chat_id: int) -> ChatSettings:
+        """Get settings for a chat, creating a default record if one doesn't exist."""
         with self._connect() as conn:
-            self._ensure_chat_settings(conn, chat_id)
             row = conn.execute(
                 "SELECT * FROM chat_settings WHERE chat_id = ?", (chat_id,)
             ).fetchone()
-            conn.commit()
-        if row is None:
-            raise RuntimeError(f"Unable to load settings for chat {chat_id}")
+
+            if row is None:
+                # If no settings exist, create a new record with default values
+                conn.execute(
+                    "INSERT INTO chat_settings (chat_id) VALUES (?)", (chat_id,)
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM chat_settings WHERE chat_id = ?", (chat_id,)
+                ).fetchone()
+
         return ChatSettings.from_row(row)
 
-    def update_chat_settings(self, chat_id: int, **changes: Any) -> ChatSettings:
-        if not changes:
+    def update_chat_settings(self, chat_id: int, **kwargs: Any) -> ChatSettings:
+        """Update one or more settings for a chat."""
+        if not kwargs:
             return self.get_chat_settings(chat_id)
 
-        current = self.get_chat_settings(chat_id)
-
-        # Build the full merged dict so the UPDATE sets every column explicitly.
-        merged = {
-            "enabled": int(changes.get("enabled", current.enabled)),
-            "log_chat_id": changes.get("log_chat_id", current.log_chat_id),
-            "verification_enabled": int(changes.get("verification_enabled", current.verification_enabled)),
-            "verification_timeout_sec": int(changes.get("verification_timeout_sec", current.verification_timeout_sec)),
-            "max_warnings": int(changes.get("max_warnings", current.max_warnings)),
-            "mute_minutes": int(changes.get("mute_minutes", current.mute_minutes)),
-            "ban_on_repeat": int(changes.get("ban_on_repeat", current.ban_on_repeat)),
-            "link_mode": str(changes.get("link_mode", current.link_mode)),
-            "blocked_words_json": json.dumps(list(changes.get("blocked_words", current.blocked_words)), ensure_ascii=True),
-            "allowed_domains_json": json.dumps(list(changes.get("allowed_domains", current.allowed_domains)), ensure_ascii=True),
-            "raid_mode": int(changes.get("raid_mode", current.raid_mode)),
-            "raid_mode_until": to_iso(changes.get("raid_mode_until", current.raid_mode_until)),
-            "raid_auto_enabled": int(changes.get("raid_auto_enabled", current.raid_auto_enabled)),
-            "flood_limit": int(changes.get("flood_limit", current.flood_limit)),
-            "flood_window_sec": int(changes.get("flood_window_sec", current.flood_window_sec)),
-            "duplicate_window_sec": int(changes.get("duplicate_window_sec", current.duplicate_window_sec)),
-            "max_caps_ratio": float(changes.get("max_caps_ratio", current.max_caps_ratio)),
-            "max_mentions": int(changes.get("max_mentions", current.max_mentions)),
-            "max_emojis": int(changes.get("max_emojis", current.max_emojis)),
-            "max_links": int(changes.get("max_links", current.max_links)),
-            "slowmode_sec": int(changes.get("slowmode_sec", current.slowmode_sec)),
-            "anti_forward": int(changes.get("anti_forward", current.anti_forward)),
-            "warn_expiry_days": int(changes.get("warn_expiry_days", current.warn_expiry_days)),
-            "mute_escalation": int(changes.get("mute_escalation", current.mute_escalation)),
-            "welcome_message": str(changes.get("welcome_message", current.welcome_message)),
-        }
+        # Prepare the SET clause and values for the SQL query
+        set_clause = ", ".join(f"{key} = ?" for key in kwargs)
+        values = list(kwargs.values())
+        values.append(chat_id)
 
         with self._connect() as conn:
-            conn.execute(
-                """
-                UPDATE chat_settings
-                SET enabled                  = :enabled,
-                    log_chat_id              = :log_chat_id,
-                    verification_enabled     = :verification_enabled,
-                    verification_timeout_sec = :verification_timeout_sec,
-                    max_warnings             = :max_warnings,
-                    mute_minutes             = :mute_minutes,
-                    ban_on_repeat            = :ban_on_repeat,
-                    link_mode                = :link_mode,
-                    blocked_words_json       = :blocked_words_json,
-                    allowed_domains_json     = :allowed_domains_json,
-                    raid_mode                = :raid_mode,
-                    raid_mode_until          = :raid_mode_until,
-                    raid_auto_enabled        = :raid_auto_enabled,
-                    flood_limit              = :flood_limit,
-                    flood_window_sec         = :flood_window_sec,
-                    duplicate_window_sec     = :duplicate_window_sec,
-                    max_caps_ratio           = :max_caps_ratio,
-                    max_mentions             = :max_mentions,
-                    max_emojis               = :max_emojis,
-                    max_links                = :max_links,
-                    slowmode_sec             = :slowmode_sec,
-                    anti_forward             = :anti_forward,
-                    warn_expiry_days         = :warn_expiry_days,
-                    mute_escalation          = :mute_escalation,
-                    welcome_message          = :welcome_message
-                WHERE chat_id = :chat_id
-                """,
-                {"chat_id": chat_id, **merged},
-            )
+            conn.execute(f"UPDATE chat_settings SET {set_clause} WHERE chat_id = ?", values)
             conn.commit()
+
         return self.get_chat_settings(chat_id)
 
     # ------------------------------------------------------------------
     # Member state
     # ------------------------------------------------------------------
-
     def touch_member(self, chat_id: int, user_id: int, username: str, full_name: str) -> None:
         """Upsert the member's identity columns (name/username can change over time)."""
         with self._connect() as conn:
@@ -514,6 +424,7 @@ class Repository:
             conn.commit()
 
     def get_member_state(self, chat_id: int, user_id: int) -> MemberState:
+        """Retrieves the member's state from the database."""
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM members WHERE chat_id = ? AND user_id = ?",
@@ -522,6 +433,7 @@ class Repository:
         return MemberState.from_row(row, chat_id, user_id)
 
     def set_member_trusted(self, chat_id: int, user_id: int, trusted: bool) -> MemberState:
+        """Sets a member's trusted status."""
         with self._connect() as conn:
             conn.execute(
                 """
@@ -565,6 +477,7 @@ class Repository:
             conn.commit()
 
     def increment_warnings(self, chat_id: int, user_id: int) -> MemberState:
+        """Increments a member's warning count and updates the last infraction time."""
         now = to_iso(utc_now())
         with self._connect() as conn:
             conn.execute(
@@ -582,6 +495,7 @@ class Repository:
         return self.get_member_state(chat_id, user_id)
 
     def set_warnings(self, chat_id: int, user_id: int, warnings: int) -> MemberState:
+        """Sets a member's warning count."""
         with self._connect() as conn:
             conn.execute(
                 """
@@ -596,6 +510,7 @@ class Repository:
         return self.get_member_state(chat_id, user_id)
 
     def set_muted_until(self, chat_id: int, user_id: int, muted_until: datetime | None) -> MemberState:
+        """Sets the timestamp until which a member is muted."""
         with self._connect() as conn:
             conn.execute(
                 """
@@ -629,6 +544,7 @@ class Repository:
     # ------------------------------------------------------------------
 
     def add_regex_filter(self, chat_id: int, pattern: str, label: str) -> RegexFilter:
+        """Adds a new regex filter for a chat."""
         now = to_iso(utc_now())
         with self._connect() as conn:
             cursor = conn.execute(
@@ -644,6 +560,7 @@ class Repository:
         return RegexFilter.from_row(row)
 
     def list_regex_filters(self, chat_id: int) -> list[RegexFilter]:
+        """Lists all regex filters for a given chat."""
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM regex_filters WHERE chat_id = ? ORDER BY id",
@@ -652,7 +569,7 @@ class Repository:
         return [RegexFilter.from_row(r) for r in rows]
 
     def delete_regex_filter(self, filter_id: int, chat_id: int) -> bool:
-        """Returns True if a row was actually deleted."""
+        """Deletes a regex filter by its ID and chat ID. Returns True if a row was actually deleted."""
         with self._connect() as conn:
             cursor = conn.execute(
                 "DELETE FROM regex_filters WHERE id = ? AND chat_id = ?",
@@ -673,6 +590,7 @@ class Repository:
         message_text: str,
         created_at: datetime,
     ) -> None:
+        """Records a message sample for flood and duplicate detection."""
         with self._connect() as conn:
             conn.execute(
                 """
@@ -684,6 +602,7 @@ class Repository:
             conn.commit()
 
     def count_recent_messages(self, chat_id: int, user_id: int, since: datetime) -> int:
+        """Counts the number of messages sent by a user in a chat since a given timestamp."""
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -698,6 +617,7 @@ class Repository:
     def count_recent_duplicates(
         self, chat_id: int, user_id: int, fingerprint: str, since: datetime
     ) -> int:
+        """Counts duplicate messages sent by a user in a chat since a given timestamp."""
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -710,6 +630,7 @@ class Repository:
         return int(row["count"]) if row else 0
 
     def prune_message_samples(self, older_than: datetime) -> None:
+        """Deletes message samples older than a specified timestamp."""
         with self._connect() as conn:
             conn.execute(
                 "DELETE FROM message_samples WHERE created_at < ?", (to_iso(older_than),)
@@ -728,6 +649,7 @@ class Repository:
         prompt_message_id: int,
         expires_at: datetime,
     ) -> PendingVerification:
+        """Creates or updates a pending verification record for a user."""
         now = utc_now()
         with self._connect() as conn:
             conn.execute(
@@ -751,6 +673,7 @@ class Repository:
         return record
 
     def get_pending_verification(self, chat_id: int, user_id: int) -> PendingVerification | None:
+        """Retrieves a pending verification record for a specific user in a chat."""
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM pending_verifications WHERE chat_id = ? AND user_id = ?",
@@ -759,6 +682,7 @@ class Repository:
         return PendingVerification.from_row(row) if row else None
 
     def get_pending_verification_by_token(self, token: str) -> PendingVerification | None:
+        """Retrieves a pending verification record by its token."""
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM pending_verifications WHERE token = ?", (token,)
@@ -766,6 +690,7 @@ class Repository:
         return PendingVerification.from_row(row) if row else None
 
     def delete_pending_verification(self, chat_id: int, user_id: int) -> None:
+        """Deletes a pending verification record for a user."""
         with self._connect() as conn:
             conn.execute(
                 "DELETE FROM pending_verifications WHERE chat_id = ? AND user_id = ?",
@@ -773,37 +698,39 @@ class Repository:
             )
             conn.commit()
 
-    def list_expired_verifications(self, now: datetime) -> list[PendingVerification]:
+    def get_expired_pending_verifications(self, older_than: datetime) -> list[PendingVerification]:
+        """Retrieves all pending verification records that have expired."""
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM pending_verifications WHERE expires_at <= ?", (to_iso(now),)
+                "SELECT * FROM pending_verifications WHERE expires_at < ?",
+                (to_iso(older_than),),
             ).fetchall()
-        return [PendingVerification.from_row(row) for row in rows]
+        return [PendingVerification.from_row(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Join events (for raid detection)
     # ------------------------------------------------------------------
 
-    def record_join(self, chat_id: int, created_at: datetime) -> None:
+    def record_join_event(self, chat_id: int, user_id: int, created_at: datetime) -> None:
+        """Records a user join event for raid detection."""
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO join_events (chat_id, created_at) VALUES (?, ?)",
-                (chat_id, to_iso(created_at)),
+                "INSERT INTO join_events (chat_id, user_id, created_at) VALUES (?, ?, ?)",
+                (chat_id, user_id, to_iso(created_at)),
             )
             conn.commit()
 
-    def count_recent_joins(self, chat_id: int, since: datetime) -> int:
+    def count_recent_join_events(self, chat_id: int, since: datetime) -> int:
+        """Counts the number of join events in a chat since a given timestamp."""
         with self._connect() as conn:
             row = conn.execute(
-                """
-                SELECT COUNT(*) AS count FROM join_events
-                WHERE chat_id = ? AND created_at >= ?
-                """,
+                "SELECT COUNT(*) AS count FROM join_events WHERE chat_id = ? AND created_at >= ?",
                 (chat_id, to_iso(since)),
             ).fetchone()
         return int(row["count"]) if row else 0
 
     def prune_join_events(self, older_than: datetime) -> None:
+        """Deletes join events older than a specified timestamp."""
         with self._connect() as conn:
             conn.execute(
                 "DELETE FROM join_events WHERE created_at < ?", (to_iso(older_than),)
@@ -814,99 +741,30 @@ class Repository:
     # Audit log
     # ------------------------------------------------------------------
 
-    def add_audit(
+    def add_audit_entry(
         self,
         chat_id: int,
-        user_id: int | None,
-        actor_id: int | None,
         action: str,
-        reason: str,
-        details: dict[str, Any] | None = None,
+        target_id: int | None = None,
+        actor_id: int | None = None,
+        reason: str | None = None,
     ) -> None:
+        """Adds an entry to the audit log."""
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO audit_log
-                    (chat_id, user_id, actor_id, action, reason, details_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO audit_log (chat_id, created_at, action, target_id, actor_id, reason)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    chat_id,
-                    user_id,
-                    actor_id,
-                    action,
-                    reason,
-                    json.dumps(details or {}, ensure_ascii=True),
-                    to_iso(utc_now()),
-                ),
+                (chat_id, to_iso(utc_now()), action, target_id, actor_id, reason),
             )
             conn.commit()
 
-    def recent_audit(self, chat_id: int, limit: int = 10) -> list[sqlite3.Row]:
+    def list_audit_log(self, chat_id: int, limit: int = 20) -> list[sqlite3.Row]:
+        """Lists recent audit log entries for a chat."""
         with self._connect() as conn:
             rows = conn.execute(
-                """
-                SELECT * FROM audit_log
-                WHERE chat_id = ?
-                ORDER BY id DESC
-                LIMIT ?
-                """,
+                "SELECT * FROM audit_log WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
                 (chat_id, limit),
             ).fetchall()
-        return list(rows)
-
-    # ------------------------------------------------------------------
-    # Raid mode expiry
-    # ------------------------------------------------------------------
-
-    def list_expired_raid_mode_chats(self, now: datetime) -> list[int]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT chat_id FROM chat_settings
-                WHERE raid_mode = 1
-                  AND raid_mode_until IS NOT NULL
-                  AND raid_mode_until <= ?
-                """,
-                (to_iso(now),),
-            ).fetchall()
-        return [int(row["chat_id"]) for row in rows]
-
-
-    def find_user_id_by_username(self, chat_id: int, username: str) -> int | None:
-        """
-        Look up a user_id from a username stored in the members table.
-        Returns None if we've never seen that username in this chat.
-        Note: usernames can change — this only works for people the bot has already seen.
-        """
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT user_id FROM members
-                WHERE chat_id = ? AND LOWER(username) = LOWER(?)
-                """,
-                (chat_id, username.lstrip("@")),
-            ).fetchone()
-        return int(row["user_id"]) if row else None
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _safe_add_columns(
-    conn: sqlite3.Connection,
-    table: str,
-    columns: list[tuple[str, str]],
-) -> None:
-    """
-    Add columns to `table` if they don't already exist.
-    SQLite doesn't support IF NOT EXISTS on ALTER TABLE, so we catch the error.
-    """
-    existing = {
-        row[1].lower()
-        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-    }
-    for col_name, col_def in columns:
-        if col_name.lower() not in existing:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}")
+        return rows

@@ -79,16 +79,18 @@ LOGGER = logging.getLogger("moderator_bot")
 
 def register_handlers(application: Application) -> None:
     """Register every command and message handler in one place."""
-    add = application.add_handler  # shorter alias
+    add = application.add_handler  # shorter alias for adding handlers
 
-    # ── Informational ────────────────────────────────────────────────────────
+    # ── Informational Commands ────────────────────────────────────────────────
+    # Commands that provide information about the bot or chat settings.
     add(CommandHandler("start",    start_command))
     add(CommandHandler("help",     help_command))
     add(CommandHandler("id",       id_command))
     add(CommandHandler("settings", settings_command))
     add(CommandHandler("logs",     logs_command))
 
-    # ── Moderation toggles ───────────────────────────────────────────────────
+    # ── Moderation Toggle Commands ───────────────────────────────────────────
+    # Commands to enable or disable various moderation features.
     add(CommandHandler("protect",        protect_command))
     add(CommandHandler("verify",         verify_command))
     add(CommandHandler("raid",           raid_command))
@@ -97,7 +99,8 @@ def register_handlers(application: Application) -> None:
     add(CommandHandler("antiforward",    antiforward_command))
     add(CommandHandler("muteescalation", muteescalation_command))
 
-    # ── Spam thresholds ──────────────────────────────────────────────────────
+    # ── Spam Threshold Configuration Commands ────────────────────────────────
+    # Commands to adjust thresholds for spam detection.
     add(CommandHandler("flood",      flood_command))
     add(CommandHandler("caps",       caps_command))
     add(CommandHandler("mentions",   mentions_command))
@@ -108,11 +111,13 @@ def register_handlers(application: Application) -> None:
     add(CommandHandler("mutewindow", mutewindow_command))
     add(CommandHandler("warnexpiry", warnexpiry_command))
 
-    # ── Welcome message ──────────────────────────────────────────────────────
+    # ── Welcome Message Configuration Commands ───────────────────────────────
+    # Commands to set or clear the chat's welcome message.
     add(CommandHandler("setwelcome",   setwelcome_command))
     add(CommandHandler("clearwelcome", clearwelcome_command))
 
-    # ── Word / domain / regex filters ────────────────────────────────────────
+    # ── Word / Domain / Regex Filter Management Commands ─────────────────────
+    # Commands for managing content filters.
     add(CommandHandler("blockword",    blockword_command))
     add(CommandHandler("unblockword",  unblockword_command))
     add(CommandHandler("listwords",    listwords_command))
@@ -123,7 +128,8 @@ def register_handlers(application: Application) -> None:
     add(CommandHandler("removeregex",  removeregex_command))
     add(CommandHandler("listregex",    listregex_command))
 
-    # ── User management (all require replying to a message) ──────────────────
+    # ── User Management Commands (require replying to a message) ─────────────
+    # Commands for directly managing user states (warnings, mutes, bans, trust).
     add(CommandHandler("approve",     approve_command))
     add(CommandHandler("unapprove",   unapprove_command))
     add(CommandHandler("shadowban",   shadowban_command))
@@ -135,38 +141,49 @@ def register_handlers(application: Application) -> None:
     add(CommandHandler("ban",         ban_command))
     add(CommandHandler("unban",       unban_command))
 
-    # ── Inline button callback ───────────────────────────────────────────────
+    # ── Inline Button Callback Handler ───────────────────────────────────────
+    # Handles callbacks from inline keyboard buttons, specifically for verification.
     add(CallbackQueryHandler(verification_callback, pattern=r"^verify:"))
 
-    # ── Message handlers (order matters — new members first) ─────────────────
+    # ── Message Handlers (order matters — new members first) ─────────────────
+    # Handlers for different types of messages. New chat members are processed first.
     add(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
+    # Handles all other messages, excluding status updates.
     add(MessageHandler(filters.ALL & ~filters.StatusUpdate.ALL, moderate_message))
 
 
 def build_application(settings: Settings) -> Application:
+    """Builds and configures the Telegram Bot Application."""
+    # Configure logging for the application.
     logging.basicConfig(
         level=getattr(logging, settings.log_level, logging.INFO),
         format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",
     )
 
+    # Initialize the repository for database interactions.
     repo = Repository(settings.db_path, settings)
-    repo.init()  # creates tables + runs migrations on existing databases
+    repo.init()  # Creates tables and runs migrations on existing databases.
 
+    # Build the Application instance with the bot token and lifecycle hooks.
     application = (
         ApplicationBuilder()
         .token(settings.bot_token)
-        .post_init(post_init)
-        .post_stop(post_stop)
+        .post_init(post_init)  # Hook to run after the bot starts polling.
+        .post_stop(post_stop)  # Hook to run before the bot stops polling.
         .build()
     )
+    # Store the repository and runtime settings in bot_data for easy access by handlers.
     application.bot_data["repo"] = repo
     application.bot_data["runtime_settings"] = settings
+    # Register all command and message handlers.
     register_handlers(application)
     return application
 
 
 def main() -> None:
+    """Main function to load settings, build the application, and start the bot."""
     settings = load_settings()
     application = build_application(settings)
     LOGGER.info("Starting moderator bot (schema v2)")
+    # Start the bot's polling mechanism to listen for updates.
     application.run_polling(allowed_updates=Update.ALL_TYPES)

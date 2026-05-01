@@ -23,29 +23,33 @@ LOGGER = logging.getLogger("moderator_bot.maintenance")
 
 
 async def maintenance_loop(application: Application) -> None:
+    """The main asynchronous loop for background maintenance tasks."""
     repo: Repository = application.bot_data["repo"]
 
     while True:
         try:
             await _run_cycle(application, repo)
         except Exception:
-            # Never let a crash in the maintenance loop kill the bot
+            # Never let a crash in the maintenance loop kill the bot.
             LOGGER.exception("Unexpected error in maintenance loop")
 
-        await asyncio.sleep(30)
+        await asyncio.sleep(30) # Wait for 30 seconds before the next cycle.
 
 
 async def _run_cycle(application: Application, repo: Repository) -> None:
+    """Executes a single cycle of maintenance tasks."""
     now = utc_now()
 
     # ── Prune old data so the DB doesn't grow forever ───────────────────────
+    # Delete message samples older than 24 hours.
     repo.prune_message_samples(now - timedelta(hours=24))
+    # Delete join events older than 2 hours.
     repo.prune_join_events(now - timedelta(hours=2))
 
     # ── Handle expired verifications ─────────────────────────────────────────
-    expired_records = repo.list_expired_verifications(now)
+    expired_records = repo.get_expired_pending_verifications(now)
     for record in expired_records:
-        # Kick the user by ban+unban (Telegram doesn't have a plain "kick" API)
+        # Kick the user by ban+unban (Telegram doesn't have a plain "kick" API).
         with contextlib.suppress(TelegramError):
             await application.bot.ban_chat_member(
                 chat_id=record.chat_id, user_id=record.user_id
@@ -62,7 +66,7 @@ async def _run_cycle(application: Application, repo: Repository) -> None:
             "verification_expired", "timed out"
         )
 
-        # Clean up the verification prompt message
+        # Clean up the verification prompt message.
         await safe_delete_by_id(
             application.bot, record.chat_id, record.prompt_message_id
         )
@@ -86,7 +90,7 @@ async def _run_cycle(application: Application, repo: Repository) -> None:
 
 
 async def post_init(application: Application) -> None:
-    """Start the maintenance background task when the bot comes online."""
+    """Starts the maintenance background task when the bot comes online."""
     application.bot_data["maintenance_task"] = application.create_task(
         maintenance_loop(application)
     )
@@ -94,7 +98,7 @@ async def post_init(application: Application) -> None:
 
 
 async def post_stop(application: Application) -> None:
-    """Cancel the maintenance task cleanly when the bot shuts down."""
+    """Cancels the maintenance task cleanly when the bot shuts down."""
     task = application.bot_data.get("maintenance_task")
     if task is None:
         return

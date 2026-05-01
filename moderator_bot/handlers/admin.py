@@ -41,6 +41,7 @@ async def _set_trusted(
     *,
     trusted: bool,
 ) -> None:
+    """Helper function to set or unset a user's trusted status."""
     if not await ensure_admin(update, context):
         return
     message = update.effective_message
@@ -52,6 +53,7 @@ async def _set_trusted(
         return
 
     repo = get_repo(context)
+    # Ensure the member exists in the database and update their details.
     repo.touch_member(chat.id, target.id, target.username or "", target.full_name)
     repo.set_member_trusted(chat.id, target.id, trusted)
     action = "approve" if trusted else "unapprove"
@@ -83,6 +85,7 @@ async def _set_shadowban(
     *,
     shadowbanned: bool,
 ) -> None:
+    """Helper function to set or unset a user's shadowban status."""
     if not await ensure_admin(update, context):
         return
     message = update.effective_message
@@ -94,6 +97,7 @@ async def _set_shadowban(
         return
 
     repo = get_repo(context)
+    # Ensure the member exists in the database and update their details.
     repo.touch_member(chat.id, target.id, target.username or "", target.full_name)
     repo.set_shadowbanned(chat.id, target.id, shadowbanned)
     action = "shadowban" if shadowbanned else "unshadowban"

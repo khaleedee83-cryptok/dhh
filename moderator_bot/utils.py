@@ -18,10 +18,12 @@ from .storage import ChatSettings, Repository, utc_now
 # ---------------------------------------------------------------------------
 
 def get_repo(context: ContextTypes.DEFAULT_TYPE) -> Repository:
+    """Retrieves the Repository instance from the application context."""
     return context.application.bot_data["repo"]
 
 
 def get_runtime_settings(context: ContextTypes.DEFAULT_TYPE) -> Settings:
+    """Retrieves the runtime Settings instance from the application context."""
     return context.application.bot_data["runtime_settings"]
 
 
@@ -30,11 +32,12 @@ def get_runtime_settings(context: ContextTypes.DEFAULT_TYPE) -> Settings:
 # ---------------------------------------------------------------------------
 
 def is_group_chat(chat: Chat | None) -> bool:
+    """Checks if the given chat is a group or supergroup."""
     return bool(chat and chat.type in {Chat.GROUP, Chat.SUPERGROUP})
 
 
 def lock_permissions() -> ChatPermissions:
-    """All-false permission set — used to mute/restrict a member."""
+    """Returns a ChatPermissions object with all permissions set to False, used to mute/restrict a member."""
     return ChatPermissions(
         can_send_messages=False,
         can_send_audios=False,
@@ -55,11 +58,12 @@ def lock_permissions() -> ChatPermissions:
 
 def default_permissions(chat: Chat | None) -> ChatPermissions:
     """
-    Restore a member's permissions to whatever the group defaults are.
+    Restores a member's permissions to whatever the group defaults are.
     Falls back to a sensible all-on preset if the chat object is unavailable.
     """
     if chat and chat.permissions:
         return chat.permissions
+    # Default permissions if chat permissions are not available.
     return ChatPermissions(
         can_send_messages=True,
         can_send_audios=True,
@@ -79,6 +83,7 @@ def default_permissions(chat: Chat | None) -> ChatPermissions:
 
 
 async def is_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int) -> bool:
+    """Checks if a user is an administrator or owner of a chat."""
     member = await context.bot.get_chat_member(chat_id, user_id)
     return member.status in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER}
 
@@ -108,7 +113,7 @@ async def ensure_admin(update, context: ContextTypes.DEFAULT_TYPE) -> bool:
 # ---------------------------------------------------------------------------
 
 def display_name(user: User) -> str:
-    """Return 'Full Name (@username)' or just 'Full Name' if no username set."""
+    """Returns a formatted display name for a user, including username if available."""
     full_name = user.full_name.strip()
     if user.username:
         return f"{full_name} (@{user.username})"
@@ -116,7 +121,7 @@ def display_name(user: User) -> str:
 
 
 def replied_user(update) -> User | None:
-    """Return the User being replied to, or None if this isn't a reply."""
+    """Returns the User object of the user being replied to, or None if it's not a reply."""
     message = update.effective_message
     if not message or not message.reply_to_message:
         return None
@@ -128,6 +133,7 @@ def replied_user(update) -> User | None:
 # ---------------------------------------------------------------------------
 
 async def safe_delete(message: Message | None) -> None:
+    """Safely deletes a message, suppressing BadRequest or Forbidden errors."""
     if message is None:
         return
     with contextlib.suppress(BadRequest, Forbidden):
@@ -135,6 +141,7 @@ async def safe_delete(message: Message | None) -> None:
 
 
 async def safe_delete_by_id(bot: Bot, chat_id: int, message_id: int | None) -> None:
+    """Safely deletes a message by its ID, suppressing BadRequest or Forbidden errors."""
     if not message_id:
         return
     with contextlib.suppress(BadRequest, Forbidden):
@@ -151,7 +158,7 @@ async def send_to_log_chat(
     title: str,
     body: str,
 ) -> None:
-    """Send a formatted entry to the chat's configured audit-log channel (if any)."""
+    """Sends a formatted entry to the chat's configured audit-log channel (if any)."""
     if not chat_settings.log_chat_id:
         return
     from telegram.constants import ParseMode  # local import keeps top-level imports clean
@@ -171,10 +178,12 @@ async def send_to_log_chat(
 
 async def get_chat_settings_fresh(repo: Repository, chat_id: int) -> ChatSettings:
     """
-    Fetch settings and automatically expire raid mode if its timer has passed.
+    Fetches chat settings and automatically expires raid mode if its timer has passed.
     Use this instead of repo.get_chat_settings() anywhere that might act on raid state.
     """
     settings = repo.get_chat_settings(chat_id)
+    # Check if raid mode is active and has expired.
     if settings.raid_mode and settings.raid_mode_until and settings.raid_mode_until <= utc_now():
+        # If expired, disable raid mode and clear the expiration timestamp.
         settings = repo.update_chat_settings(chat_id, raid_mode=False, raid_mode_until=None)
     return settings

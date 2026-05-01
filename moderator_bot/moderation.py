@@ -12,14 +12,18 @@ from .storage import ChatSettings, MemberState, RegexFilter
 # Compiled regular expressions used across all moderation checks
 # ---------------------------------------------------------------------------
 
+# Regular expression to find URLs in text.
 URL_RE = re.compile(r"((?:https?://|www\.)[^\s<>()]+)", re.IGNORECASE)
+# Regular expression to find mentions (e.g., @username) in text.
 MENTION_RE = re.compile(r"(?<!\w)@\w{3,}", re.IGNORECASE)
+# Regular expression to detect repeated characters (12 or more times).
 REPEATED_CHAR_RE = re.compile(r"(.)\1{11,}")
+# Regular expression to detect various Unicode emoji.
 EMOJI_RE = re.compile(
     "["
-    "\U0001F300-\U0001FAFF"
-    "\U00002600-\U000026FF"
-    "\U00002700-\U000027BF"
+    "\U0001F300-\U0001FAFF"  # Emoticons, Symbols & Pictographs Extended-A
+    "\U00002600-\U000026FF"  # Miscellaneous Symbols
+    "\U00002700-\U000027BF"  # Dingbats
     "]",
     re.UNICODE,
 )
@@ -28,8 +32,8 @@ EMOJI_RE = re.compile(
 @dataclass(frozen=True)
 class ModerationDecision:
     """Returned by the analysis functions when a message should be acted on."""
-    code: str                               # machine-readable reason key
-    reason: str                             # human-readable description
+    code: str                               # machine-readable reason key for the decision
+    reason: str                             # human-readable description of the decision
     details: dict[str, object] = field(default_factory=dict)  # extra context for audit log
 
 
@@ -42,20 +46,25 @@ def normalize_domain(value: str) -> str:
     text = value.strip().lower()
     if not text:
         return ""
+    # Prepend https:// if no protocol is present for proper URL parsing.
     if "://" not in text:
         text = f"https://{text}"
+    # Extract the network location (domain) or path if no netloc.
     host = urlsplit(text).netloc or urlsplit(text).path
     host = host.lower().strip()
+    # Remove 'www.' prefix if present.
     if host.startswith("www."):
         host = host[4:]
     return host
 
 
 def extract_urls(text: str) -> list[str]:
+    """Extracts all URLs from a given text using URL_RE."""
     return [match.group(1) for match in URL_RE.finditer(text)]
 
 
 def extract_domains(text: str) -> list[str]:
+    """Extracts and normalizes all domains from URLs found in a given text."""
     return [normalize_domain(url) for url in extract_urls(text)]
 
 
@@ -64,20 +73,21 @@ def link_domains_allowed(domains: Iterable[str], allowed_domains: Iterable[str])
     Return True only if every domain in `domains` matches or is a subdomain of
     something in `allowed_domains`.  An empty allowed list means nothing is allowed.
     """
+    # Normalize and store allowed domains in a set for efficient lookup.
     allowed = {normalize_domain(d) for d in allowed_domains if normalize_domain(d)}
     if not allowed:
-        return False
+        return False  # If no allowed domains are configured, no links are allowed.
     for domain in domains:
         host = normalize_domain(domain)
         if not host:
-            return False
+            return False  # Invalid domain found.
         if host in allowed:
-            continue
+            continue  # Exact match found.
         # Allow subdomains: e.g. "docs.example.com" is allowed if "example.com" is in the list.
         if any(host.endswith(f".{a}") for a in allowed):
             continue
-        return False
-    return True
+        return False  # Domain not found in allowed list or as a subdomain.
+    return True  # All domains are allowed.
 
 
 # ---------------------------------------------------------------------------
@@ -85,14 +95,16 @@ def link_domains_allowed(domains: Iterable[str], allowed_domains: Iterable[str])
 # ---------------------------------------------------------------------------
 
 def normalize_text(value: str) -> str:
+    """Normalizes text by lowercasing, stripping URLs, and consolidating whitespace."""
     lowered = value.lower().strip()
-    lowered = URL_RE.sub(" ", lowered)   # strip URLs before fingerprinting
-    return " ".join(lowered.split())
+    lowered = URL_RE.sub(" ", lowered)   # strip URLs before fingerprinting to focus on text content
+    return " ".join(lowered.split()) # Consolidate multiple spaces into single spaces.
 
 
 def fingerprint_text(value: str) -> str:
     """Produce a short, stable key that identifies near-duplicate messages."""
     normalized = normalize_text(value)
+    # Return the first 300 characters of the normalized text as a fingerprint.
     return normalized[:300] if normalized else "__empty__"
 
 
@@ -103,7 +115,7 @@ def fingerprint_text(value: str) -> str:
 def caps_ratio(text: str) -> float:
     """Return the fraction of alphabetic characters that are uppercase (0-1)."""
     letters = [ch for ch in text if ch.isalpha()]
-    if len(letters) < 8:  # ignore very short strings
+    if len(letters) < 8:  # ignore very short strings to avoid skewed ratios
         return 0.0
     upper = sum(1 for ch in letters if ch.isupper())
     return upper / len(letters)
@@ -135,7 +147,7 @@ def analyze_text(
       8. Repeated characters
     """
     if not text and not is_forwarded:
-        return None
+        return None  # No content to analyze.
 
     # 1. Custom regex filters — checked first so admins can override anything
     if text and regex_filters:
@@ -244,6 +256,7 @@ def analyze_activity(
     Analyse *behavioural* patterns (flood / duplicate spam).
     This runs after analyze_text so content checks take priority.
     """
+    # Check for message flood.
     if recent_message_count > settings.flood_limit:
         return ModerationDecision(
             code="flood",
@@ -275,7 +288,7 @@ def analyze_slowmode(
     slowmode_sec = 0 means the feature is disabled.
     """
     if settings.slowmode_sec <= 0 or last_message_at is None:
-        return None
+        return None  # Slowmode is disabled or no previous message to compare against.
 
     elapsed = (now - last_message_at).total_seconds()
     if elapsed < settings.slowmode_sec:
@@ -299,9 +312,9 @@ def check_warn_expiry(
     the user has no recorded infractions.
     """
     if warn_expiry_days <= 0 or state.last_infraction_at is None:
-        return False
+        return False  # Warning expiry is disabled or no infraction recorded.
     cutoff = now - timedelta(days=warn_expiry_days)
-    return state.last_infraction_at < cutoff
+    return state.last_infraction_at < cutoff  # Check if the last infraction is older than the cutoff.
 
 
 def calculate_mute_duration(base_minutes: int, mute_count: int, escalation: bool) -> int:
@@ -310,7 +323,8 @@ def calculate_mute_duration(base_minutes: int, mute_count: int, escalation: bool
     The duration is capped at 7 days (10 080 minutes) so it never becomes permanent.
     """
     if not escalation or mute_count <= 0:
-        return base_minutes
+        return base_minutes  # No escalation or no previous mutes.
     # Each subsequent offense doubles the time: 30 → 60 → 120 → …
+    # The exponent is capped at 8 to prevent excessively long mutes (2^8 = 256).
     multiplier = 2 ** min(mute_count, 8)  # cap the exponent at 8 (256×)
-    return min(base_minutes * multiplier, 10_080)
+    return min(base_minutes * multiplier, 10_080) # Cap the maximum mute duration at 7 days (10080 minutes).

@@ -292,13 +292,11 @@ async def _update_numeric(
     if not context.args:
         await message.reply_text(f"Usage: /{command} <value>")
         return
+
     try:
-        value = int(context.args[0])
+        value = max(minimum, int(context.args[0]))
     except ValueError:
-        await message.reply_text("Value must be an integer.")
-        return
-    if value < minimum:
-        await message.reply_text(f"Value must be at least {minimum}.")
+        await message.reply_text(f"Value must be a number (minimum {minimum}).")
         return
 
     repo = get_repo(context)
@@ -308,37 +306,41 @@ async def _update_numeric(
 
 
 async def maxwarnings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _update_numeric(update, context, command="maxwarnings", field="max_warnings", minimum=1, label="Warnings before auto-mute")
+    """Set the number of warnings before a user is muted: /maxwarnings <count>"""
+    await _update_numeric(
+        update, context,
+        command="maxwarnings",
+        field="max_warnings",
+        minimum=1,
+        label="Max warnings",
+    )
 
 
 async def mutewindow_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _update_numeric(update, context, command="mutewindow", field="mute_minutes", minimum=1, label="Base mute duration", suffix=" minutes")
+    """Set the default mute duration in minutes: /mutewindow <minutes>"""
+    await _update_numeric(
+        update, context,
+        command="mutewindow",
+        field="mute_minutes",
+        minimum=1,
+        label="Default mute duration",
+        suffix=" minutes",
+    )
 
 
-async def mentions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _update_numeric(update, context, command="mentions", field="max_mentions", minimum=0, label="Max mentions per message")
-
-
-async def emoji_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _update_numeric(update, context, command="emoji", field="max_emojis", minimum=0, label="Max emoji per message")
-
-
-async def maxlinks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _update_numeric(update, context, command="maxlinks", field="max_links", minimum=0, label="Max links per message")
-
-
-async def slowmode_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Set per-user message cooldown: /slowmode <seconds>  (0 = off)"""
-    await _update_numeric(update, context, command="slowmode", field="slowmode_sec", minimum=0, label="Slowmode cooldown", suffix=" seconds")
-
-
-async def warnexpiry_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Auto-reset warnings after X days of no infractions: /warnexpiry <days>  (0 = never)"""
-    await _update_numeric(update, context, command="warnexpiry", field="warn_expiry_days", minimum=0, label="Warn expiry", suffix=" days")
+async def flood_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the message flood limit: /flood <count>"""
+    await _update_numeric(
+        update, context,
+        command="flood",
+        field="flood_limit",
+        minimum=2,
+        label="Flood limit",
+    )
 
 
 async def caps_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Set max uppercase ratio (0-1): /caps <ratio>"""
+    """Set the maximum allowed caps ratio (0-100): /caps <percentage>"""
     if not await ensure_admin(update, context):
         return
     message = update.effective_message
@@ -346,45 +348,74 @@ async def caps_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not message or not chat:
         return
     if not context.args:
-        await message.reply_text("Usage: /caps <ratio between 0 and 1>  e.g. /caps 0.75")
+        await message.reply_text("Usage: /caps <percentage>")
         return
+
     try:
-        ratio = float(context.args[0])
+        value = max(0, min(100, int(context.args[0])))
+        ratio = value / 100.0
     except ValueError:
-        await message.reply_text("Ratio must be a decimal like 0.75")
-        return
-    if not 0 <= ratio <= 1:
-        await message.reply_text("Ratio must be between 0 and 1.")
+        await message.reply_text("Value must be a number (0-100).")
         return
 
     repo = get_repo(context)
     repo.update_chat_settings(chat.id, max_caps_ratio=ratio)
     repo.add_audit(chat.id, None, update.effective_user.id, "caps", f"ratio={ratio}")
-    await message.reply_text(f"Caps ratio limit set to {ratio:.0%}.")
+    await message.reply_text(f"Max caps ratio set to {value}%.")
 
 
-async def flood_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Set flood threshold: /flood <message_count> <seconds>"""
-    if not await ensure_admin(update, context):
-        return
-    message = update.effective_message
-    chat = update.effective_chat
-    if not message or not chat:
-        return
-    if len(context.args or []) != 2:
-        await message.reply_text("Usage: /flood <message_count> <seconds>")
-        return
-    try:
-        count = int(context.args[0])
-        seconds = int(context.args[1])
-    except ValueError:
-        await message.reply_text("Both values must be integers.")
-        return
-    if count < 1 or seconds < 1:
-        await message.reply_text("Values must be positive integers.")
-        return
+async def mentions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the maximum allowed mentions in a message: /mentions <count>"""
+    await _update_numeric(
+        update, context,
+        command="mentions",
+        field="max_mentions",
+        minimum=0,
+        label="Max mentions",
+    )
 
-    repo = get_repo(context)
-    repo.update_chat_settings(chat.id, flood_limit=count, flood_window_sec=seconds)
-    repo.add_audit(chat.id, None, update.effective_user.id, "flood", f"{count}/{seconds}s")
-    await message.reply_text(f"Flood threshold: {count} messages per {seconds} seconds.")
+
+async def emoji_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the maximum allowed emoji in a message: /emoji <count>"""
+    await _update_numeric(
+        update, context,
+        command="emoji",
+        field="max_emojis",
+        minimum=0,
+        label="Max emoji",
+    )
+
+
+async def maxlinks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the maximum allowed links in a message: /maxlinks <count>"""
+    await _update_numeric(
+        update, context,
+        command="maxlinks",
+        field="max_links",
+        minimum=0,
+        label="Max links",
+    )
+
+
+async def slowmode_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the minimum seconds between messages for a single user (0 = off): /slowmode <seconds>"""
+    await _update_numeric(
+        update, context,
+        command="slowmode",
+        field="slowmode_sec",
+        minimum=0,
+        label="Slowmode cooldown",
+        suffix=" seconds",
+    )
+
+
+async def warnexpiry_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the number of days before warnings auto-expire (0 = never): /warnexpiry <days>"""
+    await _update_numeric(
+        update, context,
+        command="warnexpiry",
+        field="warn_expiry_days",
+        minimum=0,
+        label="Warning expiry",
+        suffix=" days",
+    )

@@ -60,6 +60,7 @@ async def unblockword_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def listwords_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Lists all blocked phrases configured for the chat."""
     message = update.effective_message
     chat = update.effective_chat
     if not message or not chat:
@@ -91,7 +92,7 @@ async def allowdomain_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     domain = normalize_domain(context.args[0])
     if not domain:
-        await message.reply_text("That doesn't look like a valid domain.")
+        await message.reply_text("That doesn\"t look like a valid domain.")
         return
 
     repo = get_repo(context)
@@ -125,6 +126,7 @@ async def removedomain_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def listdomains_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Lists all allowed domains configured for the chat."""
     message = update.effective_message
     chat = update.effective_chat
     if not message or not chat:
