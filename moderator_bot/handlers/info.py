@@ -96,17 +96,17 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     s = await get_chat_settings_fresh(repo, chat.id)
 
     lines = [
-        f"Protection:        {\'on\' if s.enabled else \'off\'}",
-        f"Verification:      {\'on\' if s.verification_enabled else \'off\'} ({s.verification_timeout_sec}s)",
-        f"Raid mode:         {\'on\' if s.raid_mode else \'off\'}",
+        f"Protection:        {'on' if s.enabled else 'off'}",
+        f"Verification:      {'on' if s.verification_enabled else 'off'} ({s.verification_timeout_sec}s)",
+        f"Raid mode:         {'on' if s.raid_mode else 'off'}",
         f"Link mode:         {s.link_mode}",
-        f"Anti-forward:      {\'on\' if s.anti_forward else \'off\'}",
+        f"Anti-forward:      {'on' if s.anti_forward else 'off'}",
         f"Slowmode:          {s.slowmode_sec}s" if s.slowmode_sec else "Slowmode:          off",
         f"Warnings → mute:   {s.max_warnings}",
         f"Base mute:         {s.mute_minutes} min",
-        f"Mute escalation:   {\'on\' if s.mute_escalation else \'off\'}",
+        f"Mute escalation:   {'on' if s.mute_escalation else 'off'}",
         f"Warn expiry:       {s.warn_expiry_days} days" if s.warn_expiry_days else "Warn expiry:       off",
-        f"Ban on repeat:     {\'on\' if s.ban_on_repeat else \'off\'}",
+        f"Ban on repeat:     {'on' if s.ban_on_repeat else 'off'}",
         f"Flood threshold:   {s.flood_limit} msg / {s.flood_window_sec}s",
         f"Duplicate window:  {s.duplicate_window_sec}s",
         f"Max caps ratio:    {s.max_caps_ratio:.0%}",
@@ -114,9 +114,9 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         f"Max emoji:         {s.max_emojis}",
         f"Max links:         {s.max_links}",
         f"Blocked phrases:   {len(s.blocked_words)}",
-        f"Allowed domains:   {\', \'.join(s.allowed_domains) or \'none\'}",
-        f"Log chat:          {s.log_chat_id or \'disabled\'}",
-        f"Welcome message:   {\'custom\' if s.welcome_message else \'default\'}",
+        f"Allowed domains:   {', '.join(s.allowed_domains) or 'none'}",
+        f"Log chat:          {s.log_chat_id or 'disabled'}",
+        f"Welcome message:   {'custom' if s.welcome_message else 'default'}",
     ]
     await message.reply_text("\n".join(lines))
 
@@ -141,8 +141,8 @@ async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     for row in entries:
         timestamp = from_iso(row["created_at"])
         stamp = timestamp.strftime("%m-%d %H:%M UTC") if timestamp else "?"
-        target = f"user={row[\"user_id\"]}" if row["user_id"] else ""
-        actor = f"by={row[\"actor_id\"]}" if row["actor_id"] else ""
+        target = f"user={row['user_id']}" if row["user_id"] else ""
+        actor = f"by={row['actor_id']}" if row["actor_id"] else ""
         parts = [stamp, row["action"], target, actor, row["reason"]]
         lines.append(" | ".join(p for p in parts if p))
 
