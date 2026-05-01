@@ -66,7 +66,7 @@ async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Only count human joiners (not bots) toward the raid threshold
     human_members = [m for m in message.new_chat_members if not m.is_bot]
     for _member in human_members:
-        repo.record_join(chat.id, now)
+        repo.record_join(chat.id, _member.id, now)
 
     # Check for a join burst that should trigger automatic raid mode
     recent_joins = repo.count_recent_joins(
