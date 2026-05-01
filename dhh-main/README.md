@@ -21,6 +21,7 @@ A production-oriented Telegram moderator bot built on `python-telegram-bot` with
    - ban users
    - read messages
 4. Copy `.env.example` to `.env` and fill in `BOT_TOKEN`.
+   `ALLOWED_USER_IDS` defaults to `8151537237,7180897251,7626734289,7902074220`.
 5. Install dependencies:
 
 ```bash
@@ -46,8 +47,9 @@ Deploy notes:
 1. Push this folder to GitHub or your Railway-connected repo.
 2. Create a Railway service from the repo.
 3. Add `BOT_TOKEN` as an environment variable.
-4. Mount a persistent Railway volume to `/app/data`.
-5. Leave `DB_PATH` as `data/moderator.db`, or point it to another mounted path.
+4. Keep `ALLOWED_USER_IDS` set to `8151537237,7180897251,7626734289,7902074220`.
+5. Mount a persistent Railway volume to `/app/data`.
+6. Leave `DB_PATH` as `data/moderator.db`, or point it to another mounted path.
 
 Important:
 

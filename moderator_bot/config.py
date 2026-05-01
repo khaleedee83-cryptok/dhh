@@ -4,6 +4,13 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+DEFAULT_ALLOWED_USER_IDS = frozenset({
+    8151537237,
+    7180897251,
+    7626734289,
+    7902074220,
+})
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -28,6 +35,8 @@ class Settings:
     default_slowmode_sec: int
     # New: number of days before warnings auto-expire (0 = never)
     default_warn_expiry_days: int
+    # Telegram user IDs allowed to use bot commands.
+    allowed_user_ids: frozenset[int]
 
 
 def _read_int(name: str, default: int) -> int:
@@ -37,6 +46,25 @@ def _read_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
+
+
+def _read_int_set(name: str, default: frozenset[int]) -> frozenset[int]:
+    """Reads comma/space-separated integer IDs from an environment variable."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    values = raw.replace(";", ",").replace(" ", ",").split(",")
+    parsed: set[int] = set()
+    for value in values:
+        value = value.strip()
+        if not value:
+            continue
+        try:
+            parsed.add(int(value))
+        except ValueError as exc:
+            raise RuntimeError(f"{name} must contain only integer IDs, got {value!r}") from exc
+    return frozenset(parsed)
 
 
 def _load_env_file(path: Path) -> None:
@@ -85,4 +113,5 @@ def load_settings() -> Settings:
         default_raid_mode_minutes=_read_int("DEFAULT_RAID_MODE_MINUTES", 15),
         default_slowmode_sec=_read_int("DEFAULT_SLOWMODE_SEC", 0),
         default_warn_expiry_days=_read_int("DEFAULT_WARN_EXPIRY_DAYS", 0),
+        allowed_user_ids=_read_int_set("ALLOWED_USER_IDS", DEFAULT_ALLOWED_USER_IDS),
     )
