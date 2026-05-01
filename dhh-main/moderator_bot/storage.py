@@ -395,25 +395,9 @@ class Repository:
         if not kwargs:
             return self.get_chat_settings(chat_id)
 
-        # Map logical field names → DB column names, and serialize list types to JSON.
-        _LIST_FIELDS = {
-            "blocked_words": "blocked_words_json",
-            "allowed_domains": "allowed_domains_json",
-        }
-        col_kwargs: dict[str, Any] = {}
-        for key, value in kwargs.items():
-            if key in _LIST_FIELDS:
-                col_kwargs[_LIST_FIELDS[key]] = json.dumps(list(value))
-            elif isinstance(value, datetime):
-                # Always convert datetime → ISO string so storage format is
-                # consistent with to_iso() used in queries (T-separator, UTC).
-                col_kwargs[key] = to_iso(value)
-            else:
-                col_kwargs[key] = value
-
         # Prepare the SET clause and values for the SQL query
-        set_clause = ", ".join(f"{key} = ?" for key in col_kwargs)
-        values = list(col_kwargs.values())
+        set_clause = ", ".join(f"{key} = ?" for key in kwargs)
+        values = list(kwargs.values())
         values.append(chat_id)
 
         with self._connect() as conn:
@@ -827,17 +811,3 @@ class Repository:
                 (chat_id, clean),
             ).fetchone()
         return int(row["user_id"]) if row else None
-
-    def list_expired_raid_mode_chats(self, now: datetime) -> list[int]:
-        """Return chat_ids where raid_mode is active but raid_mode_until has passed."""
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT chat_id FROM chat_settings
-                WHERE raid_mode = 1
-                  AND raid_mode_until IS NOT NULL
-                  AND raid_mode_until <= ?
-                """,
-                (to_iso(now),),
-            ).fetchall()
-        return [row["chat_id"] for row in rows]
