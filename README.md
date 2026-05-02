@@ -92,6 +92,18 @@ The bot stores its state in SQLite at the path configured by `DB_PATH`. That inc
 - pending verifications
 - audit log entries
 
+The repository ships without a prebuilt database. The bot creates and migrates
+`data/moderator.db` automatically on first start.
+
+## Tests
+
+Install test dependencies, then run the suite:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
 ## Notes
 
 - Verification and raid mode are per chat.

@@ -113,9 +113,7 @@ async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         # Build the welcome/verification prompt message.
         if settings.welcome_message:
-            welcome_text = settings.welcome_message.format(
-                name=member.full_name, chat=chat.title or "this chat"
-            )
+            welcome_text = _render_welcome(settings.welcome_message, chat, member)
             prompt_text = (
                 f"{member.mention_html()}\n"
                 f"{welcome_text}\n\n"
@@ -147,14 +145,21 @@ async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def _send_welcome(message: Message, chat: Chat, member, settings: ChatSettings) -> None:
     """Send a welcome message to a verified (or verification-exempt) new member."""
     if settings.welcome_message:
-        text = settings.welcome_message.format(
-            name=member.full_name, chat=chat.title or "this chat"
-        )
+        text = _render_welcome(settings.welcome_message, chat, member)
         await message.reply_text(
             f"{member.mention_html()} {text}",
             parse_mode=ParseMode.HTML,
         )
     # If no custom message is set, stay silent — avoids flooding busy chats.
+
+
+def _render_welcome(template: str, chat: Chat, member) -> str:
+    """Render supported placeholders without treating other braces as format syntax."""
+    return (
+        escape(template)
+        .replace("{name}", escape(member.full_name))
+        .replace("{chat}", escape(chat.title or "this chat"))
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +187,13 @@ async def verification_callback(update: Update, context: ContextTypes.DEFAULT_TY
     # Make sure only the right user can click their own button
     if query.from_user.id != record.user_id:
         await query.answer("This button belongs to another user.", show_alert=True)
+        return
+
+    if record.expires_at <= utc_now():
+        repo.delete_pending_verification(record.chat_id, record.user_id)
+        await query.answer("This verification has expired.", show_alert=True)
+        if query.message:
+            await safe_delete_by_id(context.bot, record.chat_id, query.message.message_id)
         return
 
     chat = query.message.chat if query.message else None
@@ -253,7 +265,12 @@ async def moderate_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     now = utc_now()
     text = message.text or message.caption or "" # Get message text or caption.
-    is_forwarded = bool(message.forward_date or message.forward_from or message.forward_from_chat)
+    is_forwarded = bool(
+        getattr(message, "forward_origin", None)
+        or getattr(message, "forward_date", None)
+        or getattr(message, "forward_from", None)
+        or getattr(message, "forward_from_chat", None)
+    )
 
     # ── Slowmode check (before recording the sample, so a blocked message ──
     # ── doesn't reset the clock)                                          ──
@@ -262,12 +279,6 @@ async def moderate_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await safe_delete(message) # Delete the message if slowmode is violated.
         # Don't warn — just silently delete. The user will figure it out.
         return
-
-    # Record this message for flood/duplicate detection AFTER the slowmode
-    # check so the timestamp window is only updated on accepted messages.
-    fingerprint = fingerprint_text(text or f"media:{message.message_id}")
-    repo.record_message_sample(chat.id, user.id, fingerprint, text[:1000], now)
-    repo.update_last_message_at(chat.id, user.id, now)
 
     # ── Warn expiry: reset stale warnings before content analysis ───────────
     if check_warn_expiry(state, settings.warn_expiry_days, now):
@@ -285,7 +296,11 @@ async def moderate_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
     # ── Behavioural analysis (flood / duplicate spam) ───────────────────────
+    fingerprint = fingerprint_text(text or f"media:{message.message_id}")
     if decision is None:
+        # Only accepted content updates slowmode/flood state.
+        repo.record_message_sample(chat.id, user.id, fingerprint, text[:1000], now)
+        repo.update_last_message_at(chat.id, user.id, now)
         recent_messages = repo.count_recent_messages(
             chat.id, user.id,
             now - timedelta(seconds=settings.flood_window_sec),

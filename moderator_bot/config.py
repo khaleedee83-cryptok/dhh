@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_ALLOWED_USER_IDS = frozenset({
@@ -36,7 +36,7 @@ class Settings:
     # New: number of days before warnings auto-expire (0 = never)
     default_warn_expiry_days: int
     # Telegram user IDs allowed to use bot commands.
-    allowed_user_ids: frozenset[int]
+    allowed_user_ids: frozenset[int] = field(default_factory=frozenset)
 
 
 def _read_int(name: str, default: int) -> int:

@@ -230,7 +230,7 @@ def analyze_text(
 
         # 7. Excessive caps
         ratio = caps_ratio(text)
-        if ratio >= settings.max_caps_ratio:
+        if ratio > settings.max_caps_ratio:
             return ModerationDecision(
                 code="excessive_caps",
                 reason=f"Caps ratio too high ({ratio:.0%})",

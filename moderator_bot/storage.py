@@ -329,43 +329,77 @@ class Repository:
             chat_id    INTEGER NOT NULL,
             created_at TEXT    NOT NULL,
             action     TEXT    NOT NULL,
-            target_id  INTEGER,
+            user_id    INTEGER,
             actor_id   INTEGER,
-            reason     TEXT
+            reason     TEXT    NOT NULL DEFAULT '',
+            details_json TEXT  NOT NULL DEFAULT '{}'
         );
 
-        CREATE TABLE IF NOT EXISTS _schema_version (
+        CREATE TABLE IF NOT EXISTS schema_version (
             version INTEGER NOT NULL
         );
         """
 
     def _apply_migrations(self) -> None:
-        """Applies any missing schema migrations in order."""
+        """Apply idempotent migrations for older bundled or deployed databases."""
         with self._connect() as conn:
-            cursor = conn.execute("SELECT version FROM _schema_version")
-            row = cursor.fetchone()
-            if row is None:
-                conn.execute("INSERT INTO _schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
-                version = SCHEMA_VERSION
-            else:
-                version = row["version"]
+            conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
+            if conn.execute("SELECT COUNT(*) AS count FROM schema_version").fetchone()["count"] == 0:
+                conn.execute("INSERT INTO schema_version (version) VALUES (0)")
 
-            if version < 2:
-                # Version 2 adds the audit_log table
-                conn.execute("""
-                CREATE TABLE IF NOT EXISTS audit_log (
-                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                    chat_id    INTEGER NOT NULL,
-                    created_at TEXT    NOT NULL,
-                    action     TEXT    NOT NULL,
-                    target_id  INTEGER,
-                    actor_id   INTEGER,
-                    reason     TEXT
-                );
-                """)
-                conn.execute("UPDATE _schema_version SET version = 2")
+            self._ensure_column(conn, "chat_settings", "slowmode_sec", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "chat_settings", "anti_forward", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "chat_settings", "warn_expiry_days", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "chat_settings", "mute_escalation", "INTEGER NOT NULL DEFAULT 1")
+            self._ensure_column(conn, "chat_settings", "welcome_message", "TEXT NOT NULL DEFAULT ''")
 
+            self._ensure_column(conn, "members", "shadowbanned", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "members", "last_message_at", "TEXT")
+            self._ensure_column(conn, "members", "mute_count", "INTEGER NOT NULL DEFAULT 0")
+
+            self._ensure_column(conn, "join_events", "user_id", "INTEGER NOT NULL DEFAULT 0")
+
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id      INTEGER NOT NULL,
+                user_id      INTEGER,
+                actor_id     INTEGER,
+                action       TEXT    NOT NULL,
+                reason       TEXT    NOT NULL DEFAULT '',
+                details_json TEXT    NOT NULL DEFAULT '{}',
+                created_at   TEXT    NOT NULL
+            )
+            """)
+            self._ensure_column(conn, "audit_log", "user_id", "INTEGER")
+            self._ensure_column(conn, "audit_log", "actor_id", "INTEGER")
+            self._ensure_column(conn, "audit_log", "reason", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "audit_log", "details_json", "TEXT NOT NULL DEFAULT '{}'")
+            self._ensure_column(conn, "audit_log", "created_at", "TEXT")
+
+            columns = self._table_columns(conn, "audit_log")
+            if "target_id" in columns and "user_id" in columns:
+                conn.execute("UPDATE audit_log SET user_id = COALESCE(user_id, target_id)")
+
+            conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
             conn.commit()
+
+    @staticmethod
+    def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+        """Return the current columns for a table."""
+        return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+    @classmethod
+    def _ensure_column(
+        cls,
+        conn: sqlite3.Connection,
+        table: str,
+        column: str,
+        definition: str,
+    ) -> None:
+        """Add a missing column. Table and column names are fixed internal constants."""
+        if column not in cls._table_columns(conn, table):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     # ------------------------------------------------------------------
     # Chat settings
@@ -379,9 +413,33 @@ class Repository:
             ).fetchone()
 
             if row is None:
-                # If no settings exist, create a new record with default values
+                # If no settings exist, create a new record using runtime defaults.
                 conn.execute(
-                    "INSERT INTO chat_settings (chat_id) VALUES (?)", (chat_id,)
+                    """
+                    INSERT INTO chat_settings (
+                        chat_id,
+                        verification_timeout_sec,
+                        max_warnings,
+                        mute_minutes,
+                        flood_limit,
+                        flood_window_sec,
+                        duplicate_window_sec,
+                        slowmode_sec,
+                        warn_expiry_days
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        chat_id,
+                        self.settings.default_verification_timeout_sec,
+                        self.settings.default_max_warnings,
+                        self.settings.default_mute_minutes,
+                        self.settings.default_flood_limit,
+                        self.settings.default_flood_window_sec,
+                        self.settings.default_duplicate_window_sec,
+                        self.settings.default_slowmode_sec,
+                        self.settings.default_warn_expiry_days,
+                    ),
                 )
                 conn.commit()
                 row = conn.execute(
@@ -761,18 +819,27 @@ class Repository:
         self,
         chat_id: int,
         action: str,
-        target_id: int | None = None,
+        user_id: int | None = None,
         actor_id: int | None = None,
         reason: str | None = None,
+        details: dict | None = None,
     ) -> None:
         """Adds an entry to the audit log."""
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO audit_log (chat_id, created_at, action, target_id, actor_id, reason)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO audit_log (chat_id, created_at, action, user_id, actor_id, reason, details_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (chat_id, to_iso(utc_now()), action, target_id, actor_id, reason),
+                (
+                    chat_id,
+                    to_iso(utc_now()),
+                    action,
+                    user_id,
+                    actor_id,
+                    reason or "",
+                    json.dumps(details or {}),
+                ),
             )
             conn.commit()
 
@@ -793,22 +860,39 @@ class Repository:
     def add_audit(
         self,
         chat_id: int,
-        target_id: int | None,
-        actor_id: int | None,
-        action: str,
+        target_id: int | None = None,
+        actor_id: int | None = None,
+        action: str = "",
         reason: str | None = None,
-        details: dict | None = None,   # stored nowhere — kept for compat
+        details: dict | None = None,
+        *,
+        user_id: int | None = None,
     ) -> None:
-        """Alias used by all handlers: add_audit(chat, target, actor, action, reason)."""
-        self.add_audit_entry(chat_id, action, target_id, actor_id, reason)
+        """Alias used by handlers and older tests."""
+        target = target_id if target_id is not None else user_id
+        self.add_audit_entry(chat_id, action, target, actor_id, reason, details)
 
-    def record_join(self, chat_id: int, user_id: int, created_at: datetime) -> None:
-        """Alias used by handle_new_members."""
+    def record_join(
+        self,
+        chat_id: int,
+        user_id_or_created_at: int | datetime,
+        created_at: datetime | None = None,
+    ) -> None:
+        """Alias used by handle_new_members; accepts old tests' two-arg form."""
+        if created_at is None:
+            user_id = 0
+            created_at = user_id_or_created_at
+        else:
+            user_id = int(user_id_or_created_at)
         self.record_join_event(chat_id, user_id, created_at)
 
     def count_recent_joins(self, chat_id: int, since: datetime) -> int:
         """Alias used by handle_new_members."""
         return self.count_recent_join_events(chat_id, since)
+
+    def list_expired_verifications(self, now: datetime) -> list[PendingVerification]:
+        """Backward-compatible alias for tests and older call sites."""
+        return self.get_expired_pending_verifications(now)
 
     def recent_audit(self, chat_id: int, limit: int = 20) -> list[sqlite3.Row]:
         """Alias used by logs_command in info.py."""
