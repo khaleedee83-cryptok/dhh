@@ -196,7 +196,11 @@ async def verification_callback(update: Update, context: ContextTypes.DEFAULT_TY
             await safe_delete_by_id(context.bot, record.chat_id, query.message.message_id)
         return
 
-    chat = query.message.chat if query.message else None
+    # Fetch the chat object via the API so we always get the real group permissions,
+    # even if query.message has been deleted or is unavailable.
+    chat = None
+    with contextlib.suppress(TelegramError):
+        chat = await context.bot.get_chat(record.chat_id)
     # Grant the user default permissions after successful verification.
     await context.bot.restrict_chat_member(
         chat_id=record.chat_id,

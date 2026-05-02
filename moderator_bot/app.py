@@ -8,7 +8,6 @@ import logging
 from telegram import Update
 from telegram.ext import (
     Application,
-    ApplicationHandlerStop,
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
@@ -79,26 +78,9 @@ from .storage import Repository
 LOGGER = logging.getLogger("moderator_bot")
 
 
-async def command_access_guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Stop command handling unless the sender is on the allowed Telegram ID list."""
-    message = update.effective_message
-    user = update.effective_user
-    settings: Settings = context.application.bot_data["runtime_settings"]
-
-    if user and user.id in settings.allowed_user_ids:
-        return
-
-    if message:
-        await message.reply_text("Access denied.")
-    raise ApplicationHandlerStop
-
-
 def register_handlers(application: Application) -> None:
     """Register every command and message handler in one place."""
     add = application.add_handler  # shorter alias for adding handlers
-
-    # Restrict every bot command to the configured Telegram user ID allowlist.
-    add(MessageHandler(filters.COMMAND, command_access_guard), group=-100)
 
     # ── Informational Commands ────────────────────────────────────────────────
     # Commands that provide information about the bot or chat settings.
