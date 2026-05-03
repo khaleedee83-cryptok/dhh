@@ -8,19 +8,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── TELEGRAM ──────────────────────────────────────────────────────────────────
-TELEGRAM_API_ID      = int(os.getenv("TELEGRAM_API_ID", "0"))
-TELEGRAM_API_HASH    = os.getenv("TELEGRAM_API_HASH", "")
-YOUR_TELEGRAM_ID     = int(os.getenv("YOUR_TELEGRAM_ID", "0"))
-TELEGRAM_SESSION_STRING = os.getenv("TELEGRAM_SESSION_STRING", "")  # StringSession for Railway
-
-def _parse_channel(c: str):
-    try:
-        return int(c)       # numeric ID (private groups)
-    except ValueError:
-        return c            # @username (public channels)
-
-_raw = os.getenv("CHANNELS", "")
-CHANNELS = [_parse_channel(c.strip()) for c in _raw.split(",") if c.strip()]
+# Bot token from BotFather — this is the only Telegram credential needed.
+BOT_TOKEN        = os.getenv("BOT_TOKEN", "")
+YOUR_TELEGRAM_ID = int(os.getenv("YOUR_TELEGRAM_ID", "0"))
 
 # ── REDDIT (Social Sentiment) ────────────────────────────────────────────────
 REDDIT_CLIENT_ID     = os.getenv("REDDIT_CLIENT_ID", "")
