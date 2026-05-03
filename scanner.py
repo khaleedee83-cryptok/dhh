@@ -22,13 +22,16 @@ from model_validator import should_validate, validate_and_fix
 log = logging.getLogger("scanner")
 
 # ── THRESHOLDS ────────────────────────────────────────────────────────────────
-MIN_SCORE_TO_BUY      = 70       # Base score required
-MIN_LIQUIDITY_USD     = 5_000    
-MIN_TOKEN_AGE_MIN     = 2        
-MAX_TOKEN_AGE_MIN     = 120      
-MAX_ALREADY_PUMPED    = 300      
-SCAN_INTERVAL_SEC     = 45       
-MOMENTUM_VOL_THRESHOLD = 1.5     
+# MAHORAGA — FIRST SUMMONED.
+# No rules. No filter. Trades everything. Only learns after taking the hit.
+# The adaptation engine writes the rules from scratch — we don't pre-load any opinions.
+MIN_SCORE_TO_BUY      = 0        # No floor. The wheel has no prejudice yet.
+MIN_LIQUIDITY_USD     = 0        # No liquidity gate.
+MIN_TOKEN_AGE_MIN     = 0        # Any age.
+MAX_TOKEN_AGE_MIN     = 999_999  # No ceiling.
+MAX_ALREADY_PUMPED    = 999_999  # Doesn't know what "too pumped" means yet.
+SCAN_INTERVAL_SEC     = 45
+MOMENTUM_VOL_THRESHOLD = 0.1     # Anything moving counts
 
 # ── SESSION STATE ─────────────────────────────────────────────────────────────
 analyzed_tokens: set[str] = set()   
@@ -390,53 +393,44 @@ def score_token(pool_data: dict) -> dict:
         record_mention(token_mint, social_score)
 
     # 5b. Manipulation & Pump Detection
+    # Mahoraga doesn't dodge — it walks into everything and learns.
+    # Manipulation signals are recorded as warnings and score penalties, not hard stops.
     pump, pump_reason = is_pump_and_dump(pool_data)
     if pump:
-        warnings.append(f"MANIPULATION: {pump_reason}")
-        return {
-            "score": 0,
-            "will_trade": False,
-            "min_required": MIN_SCORE_TO_BUY,
-            "flags": flags,
-            "warnings": warnings,
-            "pool_data": pool_data,
-            "captured_state": captured_state
-        }
+        warnings.append(f"⚠️ PUMP SIGNAL: {pump_reason}")
+        score -= 15  # noted, not vetoed
 
     manip_safe, manip_reason = check_manipulation(
         pool_data.get("token_mint", ""), pool_data, captured_state, social_score
     )
     if not manip_safe:
-        warnings.append(f"MANIPULATION: {manip_reason}")
-        return {
-            "score": 0,
-            "will_trade": False,
-            "min_required": MIN_SCORE_TO_BUY,
-            "flags": flags,
-            "warnings": warnings,
-            "pool_data": pool_data,
-            "captured_state": captured_state
-        }
+        warnings.append(f"⚠️ MANIP SIGNAL: {manip_reason}")
+        score -= 10  # noted, not vetoed
 
-    # 6. MAHORAGA ADAPTATION (Dynamic Adjustments)
+    # 6. MAHORAGA ADAPTATION (self-learned penalties + bonuses)
     adaptation_penalty = adaptation.get_dynamic_score_adjustment(pool_data, captured_state)
-    score += adaptation_penalty
+    adaptation_bonus   = adaptation.get_dynamic_score_bonus(pool_data, captured_state)
+    score += adaptation_penalty + adaptation_bonus
+
     if adaptation_penalty < 0:
         warnings.append(f"MAHORAGA: Learned Penalty ({adaptation_penalty})")
+    if adaptation_bonus > 0:
+        flags.append(f"MAHORAGA: Learned Bonus (+{adaptation_bonus})")
 
-    market_defense = adaptation.get_market_defense_bonus()
-    final_min_score = MIN_SCORE_TO_BUY + market_defense
-    
-    if market_defense > 0:
-        flags.append(f"MAHORAGA: Defense Level +{market_defense}")
+    # Score floor is owned by the adaptation engine — starts loose, self-adjusts
+    final_min_score = adaptation.get_effective_min_score(MIN_SCORE_TO_BUY)
+
+    defense = adaptation.get_market_defense_bonus()
+    if defense > 0:
+        flags.append(f"MAHORAGA: Defense Level +{defense}")
 
     return {
-        "score":      score,
-        "will_trade": score >= final_min_score,
+        "score":        score,
+        "will_trade":   score >= final_min_score,
         "min_required": final_min_score,
-        "flags":      flags,
-        "warnings":   warnings,
-        "pool_data":  pool_data,
+        "flags":        flags,
+        "warnings":     warnings,
+        "pool_data":    pool_data,
         "captured_state": captured_state
     }
 
@@ -477,13 +471,11 @@ async def run_scanner(on_buy_signal: Callable, notify: Callable):
             if should_validate():
                 validate_and_fix()
 
-            # Check general market news before scanning
+            # Market news is logged but never pauses the scan.
+            # Mahoraga walks into every battlefield.
             market_safe, market_reason = check_general_market()
             if not market_safe:
-                log.warning(f"NEWS GUARD: Market-wide risk — {market_reason}. Pausing scan.")
-                await notify(f"⚠️ NEWS GUARD: {market_reason}\nScanning paused 30min.")
-                await asyncio.sleep(1800)
-                continue
+                log.info(f"MARKET NOTE: {market_reason} — continuing anyway")
 
             # ── Aggregate all signal sources ──────────────────────────
             parsed_pools: list[dict] = []
@@ -533,24 +525,24 @@ async def run_scanner(on_buy_signal: Callable, notify: Callable):
                 
                 analyzed_tokens.add(pool["token_mint"])
                 
-                if pool["liquidity_usd"] < MIN_LIQUIDITY_USD or pool["age_minutes"] > MAX_TOKEN_AGE_MIN:
-                    continue
+                # No pre-filter. Mahoraga has never been summoned before.
+                # Let every token reach the scorer — the wheel learns from all of them.
 
                 result = score_token(pool)
                 
                 if result["will_trade"]:
-                    # Final news guard check on this specific token
                     token_name = pool.get("name", "")
+                    # News guard is informational only — the wheel takes the hit either way
                     news_safe, news_reason = news_check_token(pool["token_mint"], token_name)
                     if not news_safe:
-                        await notify(f"🛑 NEWS GUARD blocked {token_name}\n{news_reason}")
-                        continue
+                        warnings_note = f"📰 NEWS NOTE: {news_reason}"
+                        log.info(warnings_note)
                     alert = format_alert(result, action="buy")
                     await notify(alert)
                     await on_buy_signal(pool["token_mint"], pool, result["captured_state"])
                 else:
-                    # Only alert for high-ish scores to avoid spam
-                    if result["score"] > 50:
+                    # Alert on everything with a non-zero score (no spam threshold yet)
+                    if result["score"] != 0:
                         alert = format_alert(result, action="alert")
                         await notify(alert)
                 

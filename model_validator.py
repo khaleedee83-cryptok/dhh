@@ -16,12 +16,12 @@ VALIDATION_FILE  = "validation_state.json"
 log = logging.getLogger("validator")
 
 # ── THRESHOLDS ────────────────────────────────────────────────────────────────
-MIN_TRADES_TO_VALIDATE    = 20     # need at least this many before validating
-RECENT_WINDOW_DAYS        = 90     # only trust patterns from last 90 days
-MAX_PENALTY_VALUE         = 20     # cap any single penalty at this
-MAX_DEFENSE_LEVEL         = 25     # cap defense level here (not too defensive)
-WIN_RATE_DROP_THRESHOLD   = 0.10   # if win rate drops 10%+ after adaptation → reset
-VALIDATION_INTERVAL_SEC   = 60 * 60 * 6   # validate every 6 hours
+MIN_TRADES_TO_VALIDATE    = 8     # need at least this many before validating
+RECENT_WINDOW_DAYS        = 60     # only trust patterns from last 90 days
+MAX_PENALTY_VALUE         = 30     # cap any single penalty at this
+MAX_DEFENSE_LEVEL         = 20     # cap defense level here (not too defensive)
+WIN_RATE_DROP_THRESHOLD   = 0.12   # if win rate drops 10%+ after adaptation → reset
+VALIDATION_INTERVAL_SEC   = 60 * 60 * 4   # validate every 6 hours
 
 # ── LOAD / SAVE ───────────────────────────────────────────────────────────────
 
@@ -131,6 +131,15 @@ def validate_and_fix() -> dict:
             # Reset penalties halfway — don't wipe everything
             for key in penalties:
                 penalties[key] = max(0, penalties[key] // 2)
+            bonuses = adaptation.get("dynamic_bonuses", {})
+            for key in bonuses:
+                bonuses[key] = max(0, bonuses[key] // 2)
+            adaptation["dynamic_bonuses"] = bonuses
+            # Also partially relax learned thresholds on reset
+            thresholds = adaptation.get("learned_thresholds", {})
+            if thresholds.get("min_score") is not None:
+                thresholds["min_score"] = max(45, thresholds["min_score"] - 5)
+            adaptation["learned_thresholds"] = thresholds
             adaptation["market_defense_level"] = max(0, adaptation["market_defense_level"] - 5)
             val_state["resets"] = val_state.get("resets", 0) + 1
             report["actions_taken"].append(f"Reset penalties due to win rate drop ({last_win_rate:.1%} → {win_rate:.1%})")
